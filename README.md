@@ -1,5 +1,4 @@
 
-```
 # Advanced Blog Platform - Backend (Django)
 
 This is the **backend implementation** of the **Advanced Blog Platform**, built with **Django & Django REST Framework**.  
