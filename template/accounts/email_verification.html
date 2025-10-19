@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Verify your account</title>
+</head>
+<body>
+    <p>Hi {{ user.username }},</p>
+
+    <p>Thank you for registering on our platform. Please verify your email by clicking the link below:</p>
+
+    <p><a href="{{ verification_link }}">{{ verification_link }}</a></p>
+
+    <p>If you did not initiate this, you can safely ignore this email.</p>
+
+    <p>Regards, <br>Your App Team</p>
+</body>
+</html>

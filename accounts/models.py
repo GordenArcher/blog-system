@@ -22,7 +22,6 @@ class UserProfile(models.Model):
     instagram = models.URLField(blank=True, null=True)
     linkedin = models.URLField(blank=True, null=True)
 
-    # Account metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     is_verified = models.BooleanField(default=False)
@@ -59,20 +58,20 @@ class UserRole(models.Model):
         return f"{self.user.user.username} → {self.role.name}"
 
 
-class LoginActivity(models.Model):
-    """
-        Tracks login history and device info for users.
-    """
+# class LoginActivity(models.Model):
+#     """
+#         Tracks login history and device info for users.
+#     """
     
-    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name="login_activities")
-    ip_address = models.GenericIPAddressField(blank=True, null=True)
-    user_agent = models.CharField(max_length=255, blank=True, null=True)
-    location = models.CharField(max_length=255, blank=True, null=True)
-    logged_in_at = models.DateTimeField(auto_now_add=True)
-    logged_out_at = models.DateTimeField(blank=True, null=True)
+#     user = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name="login_activities")
+#     ip_address = models.GenericIPAddressField(blank=True, null=True)
+#     user_agent = models.CharField(max_length=255, blank=True, null=True)
+#     location = models.CharField(max_length=255, blank=True, null=True)
+#     logged_in_at = models.DateTimeField(auto_now_add=True)
+#     logged_out_at = models.DateTimeField(blank=True, null=True)
 
-    def __str__(self):
-        return f"Login by {self.user.user.username} at {self.logged_in_at}"
+#     def __str__(self):
+#         return f"Login by {self.user.user.username} at {self.logged_in_at}"
 
 
 class AccountVerification(models.Model):
