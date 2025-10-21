@@ -10,8 +10,8 @@ class UserProfile(models.Model):
         Extends the default Django User model with additional fields.
     """
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
-    profile_image = models.ImageField(upload_to="profiles/profile", blank=True, null=True)
-    profile_cover_image = models.ImageField(upload_to="profiles/covers", blank=True, null=True)
+    profile_image = models.FileField(upload_to="profiles/profile", blank=True, null=True)
+    profile_cover_image = models.FileField(upload_to="profiles/covers", blank=True, null=True)
     bio = models.TextField(blank=True, null=True)
     phone_number = models.CharField(max_length=15, blank=True, null=True)
     address = models.CharField(max_length=255, blank=True, null=True)

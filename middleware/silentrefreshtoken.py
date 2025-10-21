@@ -8,13 +8,15 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 class SilentRefreshJwtMiddleware(MiddlewareMixin):
     """
-    - Reads access & refresh tokens from cookies.
-    - If access is expired or about to expire (< refresh_threshold seconds),
-      tries to refresh using refresh token.
-    - If refresh succeeds: inject new access token into request.META['HTTP_AUTHORIZATION']
-      so DRF's authentication will run on the new token.
-    - On response, if a new access token was created, set it as an HttpOnly cookie.
+        - Reads access & refresh tokens from cookies.
+        - If access is expired or about to expire (< refresh_threshold seconds),
+        tries to refresh using refresh token.
+        - If refresh succeeds: inject new access token into request.META['HTTP_AUTHORIZATION']
+        so DRF's authentication will run on the new token.
+        - On response, if a new access token was created, set it as an HttpOnly cookie.
     """
+
+    print("IS THIS WORKING...")
 
     REFRESH_THRESHOLD = 60
 
@@ -60,8 +62,8 @@ class SilentRefreshJwtMiddleware(MiddlewareMixin):
 
     def _try_refresh(self, request, refresh_token_str):
         """
-        Attempt to get a new access token using the provided refresh token string.
-        On success, attach new access token to the request so authentication runs on it.
+            Attempt to get a new access token using the provided refresh token string.
+            On success, attach new access token to the request so authentication runs on it.
         """
         try:
             refresh = RefreshToken(refresh_token_str)

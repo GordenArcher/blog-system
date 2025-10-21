@@ -1,4 +1,4 @@
-def set_jwt_cookies(response, refresh, access, resume_token):
+def set_jwt_cookies(response, refresh, access):
     """Attach JWT tokens to cookies."""
     response.set_cookie(
         key="access",
@@ -19,11 +19,12 @@ def set_jwt_cookies(response, refresh, access, resume_token):
     )
 
     response.set_cookie(
-        key="resume_token",
-        value=str(resume_token),
+        key="loggedin",
+        value=bool(True),
         httponly=True,
         secure=True,
         samesite="Lax",
         max_age=60 * 60 * 24  
     )
+    
     return response

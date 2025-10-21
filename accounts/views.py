@@ -14,56 +14,100 @@ from blogsystem.handler.responses.error import error_response
 from blogsystem.handler.responses.success import success_response
 from handlers.services.email_service import send_templated_email
 from handlers.services.sms_service import send_sms
+from datetime import date
 
 
 @api_view(['GET'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def get_profile(request):
-    profile = request.user.profile
+    try:
+        
+        try:
+            profile = UserProfile.objects.get(user=request.user)
+        except Exception as e:
+            return error_response("user has no profile")
 
-    data = UserProfileSerializer(profile)
+        data = UserProfileSerializer(profile)
 
-    return success_response("ok", data)
+        return success_response("ok", data.data)
+    
+    except Exception as e:
+        return error_response("An error occured while fetching your profile", {"details": str(e)})
 
 
 
 @api_view(['PUT'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def update_profile(request):
-    profile = request.user.profile
-    data = request.data
+    try:
+        profile = request.user.profile
+        data = request.data
 
-    profile.bio = data.get('bio', profile.bio)
-    profile.phone_number = data.get('phone_number', profile.phone_number)
-    profile.address = data.get('address', profile.address)
-    profile.website = data.get('website', profile.website)
-    profile.date_of_birth = data.get('date_of_birth', profile.date_of_birth)
-    profile.twitter = data.get('twitter', profile.twitter)
-    profile.facebook = data.get('facebook', profile.facebook)
-    profile.instagram = data.get('instagram', profile.instagram)
-    profile.linkedin = data.get('linkedin', profile.linkedin)
+        fields = [
+            'bio', 'phone_number', 'address', 'website', 'date_of_birth',
+            'twitter', 'facebook', 'instagram', 'linkedin'
+        ]
 
-    # handle images if sent via multipart/form-data
-    if 'profile_image' in request.FILES:
-        profile.profile_image = request.FILES['profile_image']
-    if 'profile_cover_image' in request.FILES:
-        profile.profile_cover_image = request.FILES['profile_cover_image']
+        changed_fields = []
 
-    profile.save()
-    return success_response('Profile updated successfully', None, status=status.HTTP_200_OK)
+        def normalize_value(field, value):
+            """Convert input strings to correct types for comparison."""
+            if field == 'date_of_birth' and isinstance(value, str) and value:
+                try:
+                    return date.fromisoformat(value)
+                except ValueError:
+                    return None
+            return value or None
+
+        for field in fields:
+            current_value = getattr(profile, field)
+            new_value = normalize_value(field, data.get(field, current_value))
 
 
+            if new_value != current_value:
+                setattr(profile, field, new_value)
+                changed_fields.append(field)
+
+
+        for img_field in ["profile_image", "profile_cover_image"]:
+            if img_field in request.FILES:
+                setattr(profile, img_field, request.FILES[img_field])
+                changed_fields.append(img_field)
+
+        if not changed_fields:
+            return success_response(
+                "No changes detected — profile remains the same.",
+                None,
+                status.HTTP_200_OK
+            )
+
+        profile.save()
+        return success_response(
+            "Profile updated successfully.",
+            {"updated_fields": changed_fields},
+            status.HTTP_200_OK
+        )
+
+    except Exception as e:
+        return error_response(
+            "An error occurred while updating your profile",
+            {"details": str(e)}
+        )
+    
 
 @api_view(['GET'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def get_user_roles(request):
-    profile = request.user.profile
-    roles = profile.roles.select_related('role').all()
-    data = [{'name': r.role.name, 'description': r.role.description} for r in roles]
-    return success_response("", {'roles': data})
+
+    try:
+
+        profile = request.user.profile
+        roles = profile.roles.select_related('role').all()
+        data = [{'name': r.role.name, 'description': r.role.description} for r in roles]
+        return success_response("", {'roles': data})
+
+    except Exception as e:
+        return error_response("An error occured while fetching your roles", {"details": str(e)})
 
 
 
@@ -71,22 +115,27 @@ def get_user_roles(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def assign_role(request):
-    if not request.user.is_staff:
-        return error_response("Request denied \n You can't assign roles", {'details': 'Only admins can assign roles'}, status=status.HTTP_403_FORBIDDEN)
-
-    username = request.data.get('username')
-    role_name = request.data.get('role')
 
     try:
-        user = User.objects.get(username=username)
-        profile = user.profile
-        role = Role.objects.get(name=role_name)
-    except (User.DoesNotExist, Role.DoesNotExist):
-        return Response({'error': 'User or Role not found'}, status=status.HTTP_404_NOT_FOUND)
 
+        if not request.user.is_staff:
+            return error_response("Request denied \n You can't assign roles", {'details': 'Only admins can assign roles'}, status=status.HTTP_403_FORBIDDEN)
 
-    UserRole.objects.get_or_create(user=profile, role=role)
-    return success_response("role", {'message': f'Role "{role_name}" assigned to {username}'})
+        username = request.data.get('username')
+        role_name = request.data.get('role')
+
+        try:
+            user = User.objects.get(username=username)
+            profile = user.profile
+            role = Role.objects.get(name=role_name)
+        except (User.DoesNotExist, Role.DoesNotExist):
+            return Response({'error': 'User or Role not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        UserRole.objects.get_or_create(user=profile, role=role)
+        return success_response("role", {'message': f'Role "{role_name}" assigned to {username}'})
+    
+    except Exception as e:
+        return error_response("An error occured while fetching your profile", {"details": str(e)})
 
 
 
@@ -94,18 +143,25 @@ def assign_role(request):
 @authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def get_login_activity(request):
-    profile = request.user.profile
-    activities = profile.login_activities.all().order_by('-logged_in_at')[:10]  # latest 10
-    data = [
-        {
-            "ip": a.ip_address,
-            "user_agent": a.user_agent,
-            "location": a.location,
-            "logged_in_at": a.logged_in_at,
-            "logged_out_at": a.logged_out_at,
-        } for a in activities
-    ]
-    return Response({'login_history': data})
+
+    try:
+
+        profile = request.user.profile
+        activities = profile.login_activities.all().order_by('-logged_in_at')[:10]
+        data = [
+            {
+                "ip": a.ip_address,
+                "user_agent": a.user_agent,
+                "location": a.location,
+                "logged_in_at": a.logged_in_at,
+                "logged_out_at": a.logged_out_at,
+            } for a in activities
+        ]
+        return success_response("retrieved", {'login_history': data})
+    
+    except Exception as e:
+        return error_response("An error occured while fetching your activities", {"details": str(e)})
+
 
 
 @api_view(['POST'])

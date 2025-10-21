@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os
 from dotenv import load_dotenv
+from datetime import timedelta
 load_dotenv()
 
 
@@ -29,47 +30,59 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv("DEBUG")
 
-ALLOWED_HOSTS = os.getenv(list("ALLOWED_HOSTS"))
+ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 
 
 # Application definition
 
 INSTALLED_APPS = [
+    "corsheaders",
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'accounts.apps.AccountsConfig',
-    'authentication.apps.AuthenticationConfig',
+    'accounts',
+    'authentication',
 ]
 
 MIDDLEWARE = [
-    "corsheaders",
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     "corsheaders.middleware.CorsMiddleware",
+    'middleware.silentrefreshtoken.SilentRefreshJwtMiddleware',
     'django.middleware.common.CommonMiddleware',
     'middleware.csrf.CSRFFromCookieMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
-    'middleware.silentrefreshtoken.SilentRefreshJwtMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
+        'authentication.handler.cookies.auth.CookieJWTAuthentication',
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '100/minute',
+        'anon': '20/minute',
+        'register': '5/hour',
+    },
 }
 
 
-from datetime import timedelta
+
+
 
 # Simple JWT configuration
 SIMPLE_JWT = {
@@ -124,7 +137,7 @@ ROOT_URLCONF = 'blogsystem.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [ os.path.join("templates" / BASE_DIR) ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [

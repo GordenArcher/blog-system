@@ -1,7 +1,8 @@
-# accounts/serializers.py
+
 from rest_framework import serializers
 from django.contrib.auth.models import User
-from .models import UserProfile, Role, UserRole, LoginActivity
+from .models import UserProfile, Role, UserRole
+
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -30,10 +31,4 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
 class RoleSerializer(serializers.ModelSerializer):
     class Meta:
         model = Role
-        fields = '__all__'
-
-
-class LoginActivitySerializer(serializers.ModelSerializer):
-    class Meta:
-        model = LoginActivity
         fields = '__all__'
