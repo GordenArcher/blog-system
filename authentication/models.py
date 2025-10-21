@@ -12,6 +12,8 @@ class LoginActivity(models.Model):
     user_agent = models.CharField(max_length=255, blank=True, null=True)
     timestamp = models.DateTimeField(auto_now_add=True)
     last_active = models.DateTimeField(auto_now=True)
+    logged_in_at = models.DateTimeField(auto_now_add=True, blank=True, null=True)
+    logged_out_at = models.DateTimeField(blank=True, null=True)
     success = models.BooleanField(default=True)
     logged_out = models.BooleanField(default=False)
 

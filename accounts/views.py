@@ -5,11 +5,12 @@ from rest_framework import status
 from django.contrib.auth.models import User
 from django.utils import timezone
 from .models import UserProfile, Role, UserRole, AccountVerification
-from rest_framework_simplejwt.authentication import JWTAuthentication
+# from rest_framework_simplejwt.authentication import JWTAuthentication
 from datetime import timedelta
 import uuid
 from django.conf import settings
 from .serializers import *
+from authentication.serializers import LoginActivitySerializer
 from blogsystem.handler.responses.error import error_response
 from blogsystem.handler.responses.success import success_response
 from handlers.services.email_service import send_templated_email
@@ -112,7 +113,6 @@ def get_user_roles(request):
 
 
 @api_view(['POST'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def assign_role(request):
 
@@ -140,7 +140,6 @@ def assign_role(request):
 
 
 @api_view(['GET'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def get_login_activity(request):
 
@@ -148,16 +147,17 @@ def get_login_activity(request):
 
         profile = request.user.profile
         activities = profile.login_activities.all().order_by('-logged_in_at')[:10]
-        data = [
-            {
-                "ip": a.ip_address,
-                "user_agent": a.user_agent,
-                "location": a.location,
-                "logged_in_at": a.logged_in_at,
-                "logged_out_at": a.logged_out_at,
-            } for a in activities
-        ]
-        return success_response("retrieved", {'login_history': data})
+        # data = [
+        #     {
+        #         "ip": a.ip_address,
+        #         "user_agent": a.user_agent,
+        #         "logged_in_at": a.logged_in_at,
+        #         "logged_out_at": a.logged_out_at,
+        #     } for a in activities
+        # ]
+
+        data = LoginActivitySerializer(activities, many=True)
+        return success_response("retrieved", {'login_history': data.data})
     
     except Exception as e:
         return error_response("An error occured while fetching your activities", {"details": str(e)})
@@ -165,7 +165,6 @@ def get_login_activity(request):
 
 
 @api_view(['POST'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def request_verification(request):
     """
@@ -235,7 +234,6 @@ def request_verification(request):
 
 
 @api_view(['POST'])
-@authentication_classes([JWTAuthentication])
 @permission_classes([IsAuthenticated])
 def verify_account(request):
     """
