@@ -33,7 +33,7 @@ class SilentRefreshJwtMiddleware(MiddlewareMixin):
         """
             nothing to do if no tokens (authenticate flow will handle it)
         """
-        if not access_token or not refresh_token:
+        if not refresh_token:
             return None
 
         """

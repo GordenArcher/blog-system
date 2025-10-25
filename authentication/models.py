@@ -5,7 +5,7 @@ from accounts.models import UserProfile
 
 
 class LoginActivity(models.Model):
-    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name="login_activities")
+    user = models.ForeignKey(UserProfile, on_delete=models.CASCADE, related_name="login_activities", blank=True, null=True)
     device_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
     device_name = models.CharField(max_length=255, blank=True, null=True)
     ip_address = models.GenericIPAddressField(blank=True, null=True)
@@ -18,7 +18,7 @@ class LoginActivity(models.Model):
     logged_out = models.BooleanField(default=False)
 
     def __str__(self):
-        return f"{self.user.user.username} - {self.device_name or 'Unknown Device'}"
+        return f"{self.user} - {self.device_name or 'Unknown Device'}"
 
 
 # class SessionResumeToken(models.Model):

@@ -22,13 +22,13 @@ from datetime import timedelta
 def get_all_posts(request):
 
     try:
-        posts = Post.objects.all().order_by("-created_at")
+        posts = Post.objects.filter(is_published=True).all().order_by("-created_at")
 
         serializer = PostSerializer(posts, many=True)
 
         return success_response("Posts fetched successfully", serializer.data)
     except Exception as e:
-        return error_response(str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("", str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 
@@ -78,12 +78,12 @@ def create_post(request):
                 return error_response(f"Category with id {category_id} not found", status.HTTP_404_NOT_FOUND)
         
         cover_image = data.get("cover_image", "").strip()
-        if cover_image:
-            url_validator = URLValidator()
-            try:
-                url_validator(cover_image)
-            except ValidationError:
-                return error_response("Invalid cover image URL", status.HTTP_400_BAD_REQUEST)
+        # if cover_image:
+        #     url_validator = URLValidator()
+        #     try:
+        #         url_validator(cover_image)
+        #     except ValidationError:
+        #         return error_response("Invalid cover image URL", {}, status.HTTP_400_BAD_REQUEST)
         
         canonical_url = data.get("canonical_url", "").strip()
         if canonical_url:
@@ -339,79 +339,62 @@ def delete_post(request, post_id):
 @permission_classes([IsAuthenticatedOrReadOnly])
 def get_post_by_slug(request, slug):
     """
-        Get a single post by slug. Increments view count.
-        Returns full post details including author, category, tags, and comments count.
+    Get a single post by slug using PostSerializer,
+    with additional dynamic fields like is_liked and views.
     """
-    try: 
-        post = Post.objects.select_related('author', 'author__user', 'category').prefetch_related('tags', 'likes').get(slug=slug)
-        
-        if not post.is_published:
-            if not request.user.is_authenticated:
-                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
-            
-            author = UserProfile.objects.get(user=request.user)
-            if post.author != author:
-                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
-        
-        # Increment view count (only once per session to avoid inflation)
+    try:
+        post = (
+            Post.objects
+            .select_related("author", "author__user", "category")
+            .prefetch_related("tags", "post_likes")
+            .get(slug=slug)
+        )
+
+        # Restrict unpublished posts
+        if not post.is_published and not request.user.is_authenticated:
+            return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+
+        # Increment view count once per session
         session_key = f"post_viewed_{post.id}"
         if not request.session.get(session_key):
             post.views += 1
-            post.save(update_fields=['views'])
+            post.save(update_fields=["views"])
             request.session[session_key] = True
-        
+
+        # Determine if user liked the post
         is_liked = False
         if request.user.is_authenticated:
             try:
                 user_profile = UserProfile.objects.get(user=request.user)
-                is_liked = post.likes.filter(id=user_profile.id).exists()
+                is_liked = post.post_likes.filter(user=user_profile).exists()
             except UserProfile.DoesNotExist:
                 pass
-        
-        response_data = {
-            "id": str(post.id),
-            "slug": post.slug,
-            "title": post.title,
-            "content": post.content,
-            "content_markdown": post.content_markdown,
-            "excerpt": post.excerpt,
-            "cover_image": post.cover_image,
-            "author": {
-                "id": str(post.author.id),
-                "username": post.author.user.username,
-                "full_name": post.author.user.get_full_name() or post.author.user.username,
-                "email": post.author.user.email,
-                "bio": getattr(post.author, 'bio', ''),
-                "avatar": getattr(post.author, 'avatar', None),
-            },
-            "category": {
-                "id": post.category.id,
-                "name": post.category.name,
-                "slug": post.category.slug
-            } if post.category else None,
-            "tags": [{"id": tag.id, "name": tag.name, "slug": tag.slug} for tag in post.tags.all()],
-            "views": post.views,
-            "likes_count": post.total_likes(),
+
+        # Serialize the post
+        from .serializers import PostSerializer  # import here to avoid circular import
+        serializer = PostSerializer(post, context={"request": request})
+        data = serializer.data
+
+        # Add dynamic fields
+        data.update({
             "is_liked": is_liked,
-            "is_published": post.is_published,
-            "created_at": post.created_at.isoformat(),
-            "updated_at": post.updated_at.isoformat(),
-            "seo": {
-                "title": post.seo_title or post.title,
-                "description": post.seo_description or post.excerpt,
-                "canonical_url": post.canonical_url,
-            }
-        }
-        
-        return success_response("Post retrieved successfully", response_data, status.HTTP_200_OK)
-    
+            "likes_count": post.total_likes(),
+            "views": post.views,
+        })
+
+        return success_response("Post retrieved successfully", data, status.HTTP_200_OK)
+
     except Post.DoesNotExist:
         return error_response("Post not found", status.HTTP_404_NOT_FOUND)
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Error retrieving post: {str(e)}", exc_info=True)
-        return error_response("An error occurred while retrieving the post", status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response(
+            "An error occurred while retrieving the post",
+            {"details": str(e)},
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
 @api_view(["GET"])
@@ -421,16 +404,16 @@ def get_post_by_id(request, post_id):
     Get a single post by ID. Similar to get_by_slug but uses UUID.
     """
     try:
-        post = Post.objects.select_related('author', 'author__user', 'category').prefetch_related('tags', 'likes').get(id=post_id)
+        post = Post.objects.select_related('author', 'author__user', 'category').prefetch_related('tags', 'post_likes').get(id=post_id)
         
         # Only show published posts to non-authors
         if not post.is_published:
             if not request.user.is_authenticated:
                 return error_response("Post not found", status.HTTP_404_NOT_FOUND)
             
-            author = UserProfile.objects.get(user=request.user)
-            if post.author != author:
-                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+            # author = UserProfile.objects.get(user=request.user)
+            # if post.author != author:
+            #     return error_response("Post not found", status.HTTP_404_NOT_FOUND)
         
         # Increment view count
         session_key = f"post_viewed_{post.id}"
@@ -603,8 +586,7 @@ def list_posts(request):
                 },
                 "category": {
                     "id": post.category.id,
-                    "name": post.category.name,
-                    "slug": post.category.slug
+                    "name": post.category.name
                 } if post.category else None,
                 "tags": [{"id": tag.id, "name": tag.name, "slug": tag.slug} for tag in post.tags.all()[:5]],
                 "views": post.views,
@@ -642,6 +624,7 @@ def list_posts(request):
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_user_posts(request):
@@ -673,29 +656,10 @@ def get_user_posts(request):
         except EmptyPage:
             posts_page = paginator.page(paginator.num_pages)
         
-        posts_data = []
-        for post in posts_page:
-            posts_data.append({
-                "id": str(post.id),
-                "slug": post.slug,
-                "title": post.title,
-                "excerpt": post.excerpt,
-                "cover_image": post.cover_image,
-                "category": {
-                    "id": post.category.id,
-                    "name": post.category.name,
-                    "slug": post.category.slug
-                } if post.category else None,
-                "tags": [{"name": tag.name} for tag in post.tags.all()[:5]],
-                "views": post.views,
-                "likes_count": post.total_likes(),
-                "is_published": post.is_published,
-                "created_at": post.created_at.isoformat(),
-                "updated_at": post.updated_at.isoformat(),
-            })
+        serializer = PostSerializer(posts, many=True)
         
         response_data = {
-            "posts": posts_data,
+            "posts": serializer.data,
             "pagination": {
                 "current_page": posts_page.number,
                 "total_pages": paginator.num_pages,
@@ -715,3 +679,7 @@ def get_user_posts(request):
         logger = logging.getLogger(__name__)
         logger.error(f"Error retrieving user posts: {str(e)}", exc_info=True)
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+        # https://www.figma.com/community/file/1225308519419319279/jobpilot-job-portal-figma-ui-template-community

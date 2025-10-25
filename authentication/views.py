@@ -55,6 +55,7 @@ def register_view(request):
 
 register_view.throttle_scope = "register"
 
+
 @api_view(["POST"])
 @permission_classes([])
 @authentication_classes([])
@@ -78,7 +79,7 @@ def login(request):
                 return error_response("profile not found", {"details":"user got no profile"})
             
             LoginActivity.objects.create(user=profile, ip_address=ip, user_agent=agent, success=False)
-            return error_response("Invalid credentials", {"details": "wrong credentials"}, status.HTTP_401_UNAUTHORIZED)
+            return error_response("Invalid credentials", {"details": "wrong username and password"}, status.HTTP_401_UNAUTHORIZED)
 
         refresh = RefreshToken.for_user(user)
         access = refresh.access_token
@@ -102,7 +103,6 @@ def login(request):
 @permission_classes([IsAuthenticated])
 def check_authentication(request):
     try:
-         
         return success_response("authenticated", { "auth": True })
 
     except Exception as e:
