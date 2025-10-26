@@ -38,7 +38,7 @@ class Post(models.Model):
     content = models.TextField()
     content_markdown = models.BooleanField(default=True)
     excerpt = models.TextField(blank=True)
-    cover_image = models.URLField(blank=True, null=True)
+    cover_image = models.FileField(upload_to="posts/cover", blank=True, null=True)
     tags = models.ManyToManyField(Tag, related_name="posts", blank=True)
 
     views = models.PositiveIntegerField(default=0)

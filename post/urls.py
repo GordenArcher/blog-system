@@ -9,4 +9,6 @@ urlpatterns = [
     path("update/<slug:slug>/", views.update_post),
     path("delete/<slug:slug>/", views.delete_post),
     path("my-posts/", views.get_user_posts),
+    path("category/", views.get_categories),
+    path("hero/", views.featured_post),
 ]

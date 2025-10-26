@@ -1,4 +1,4 @@
-
+import random
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticatedOrReadOnly, IsAuthenticated
 from rest_framework import status
@@ -6,7 +6,7 @@ from django.db import IntegrityError
 from .models import Post, UserProfile, Category, Tag
 from blogsystem.handler.responses.error import error_response
 from blogsystem.handler.responses.success import success_response
-from .serializers import PostSerializer
+from .serializers import PostSerializer, CategorySerializer
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
@@ -35,6 +35,7 @@ def get_all_posts(request):
 @api_view(["POST"])
 @permission_classes([IsAuthenticated])
 def create_post(request):
+    
     """
     Create a new blog post with comprehensive validation and error handling.
     
@@ -44,30 +45,32 @@ def create_post(request):
     """
     try:
         data = request.data
+
+        print(data)
         
         title = data.get("title", "").strip()
         content = data.get("content", "").strip()
         
         if not title:
-            return error_response("Title is required", status.HTTP_400_BAD_REQUEST)
+            return error_response("Title is required", None, status.HTTP_400_BAD_REQUEST)
         
         if not content:
-            return error_response("Content is required", status.HTTP_400_BAD_REQUEST)
+            return error_response("Content is required", None, status.HTTP_400_BAD_REQUEST)
         
         if len(title) < 5:
-            return error_response("Title must be at least 5 characters long", status.HTTP_400_BAD_REQUEST)
+            return error_response("Title must be at least 5 characters long", None, status.HTTP_400_BAD_REQUEST)
         
         if len(title) > 200:
-            return error_response("Title cannot exceed 200 characters", status.HTTP_400_BAD_REQUEST)
+            return error_response("Title cannot exceed 200 characters", None, status.HTTP_400_BAD_REQUEST)
         
         if len(content) < 50:
-            return error_response("Content must be at least 50 characters long", status.HTTP_400_BAD_REQUEST)
+            return error_response("Content must be at least 50 characters long", None, status.HTTP_400_BAD_REQUEST)
         
        
         try:
             author = UserProfile.objects.get(user=request.user)
         except UserProfile.DoesNotExist:
-            return error_response("User profile not found. Please complete your profile.", status.HTTP_404_NOT_FOUND)
+            return error_response("User profile not found. Please complete your profile.", None, status.HTTP_404_NOT_FOUND)
         
         category = None
         category_id = data.get("category_id")
@@ -75,15 +78,7 @@ def create_post(request):
             try:
                 category = Category.objects.get(id=category_id)
             except Category.DoesNotExist:
-                return error_response(f"Category with id {category_id} not found", status.HTTP_404_NOT_FOUND)
-        
-        cover_image = data.get("cover_image", "").strip()
-        # if cover_image:
-        #     url_validator = URLValidator()
-        #     try:
-        #         url_validator(cover_image)
-        #     except ValidationError:
-        #         return error_response("Invalid cover image URL", {}, status.HTTP_400_BAD_REQUEST)
+                return error_response(f"Category with id {category_id} not found", None, status.HTTP_404_NOT_FOUND)
         
         canonical_url = data.get("canonical_url", "").strip()
         if canonical_url:
@@ -91,7 +86,7 @@ def create_post(request):
             try:
                 url_validator(canonical_url)
             except ValidationError:
-                return error_response("Invalid canonical URL", status.HTTP_400_BAD_REQUEST)
+                return error_response("Invalid canonical URL", None, status.HTTP_400_BAD_REQUEST)
         
         content_markdown = data.get("content_markdown", True)
         if not content_markdown:
@@ -107,23 +102,28 @@ def create_post(request):
             clean_content = bleach.clean(content, tags=[], strip=True)
             excerpt = clean_content[:200] + "..." if len(clean_content) > 200 else clean_content
         elif len(excerpt) > 500:
-            return error_response("Excerpt cannot exceed 500 characters", status.HTTP_400_BAD_REQUEST)
+            return error_response("Excerpt cannot exceed 500 characters", None, status.HTTP_400_BAD_REQUEST)
         
         seo_title = data.get("seo_title", "").strip() or title
         seo_description = data.get("seo_description", "").strip() or excerpt
         
         if len(seo_title) > 255:
-            return error_response("SEO title cannot exceed 255 characters", status.HTTP_400_BAD_REQUEST)
+            return error_response("SEO title cannot exceed 255 characters", None, status.HTTP_400_BAD_REQUEST)
         
         if len(seo_description) > 500:
-            return error_response("SEO description cannot exceed 500 characters", status.HTTP_400_BAD_REQUEST)
+            return error_response("SEO description cannot exceed 500 characters", None, status.HTTP_400_BAD_REQUEST)
         
         tags_data = data.get("tags", [])
         if not isinstance(tags_data, list):
-            return error_response("Tags must be an array", status.HTTP_400_BAD_REQUEST)
+            return error_response("Tags must be an array", None, status.HTTP_400_BAD_REQUEST)
         
         if len(tags_data) > 10:
-            return error_response("Maximum 10 tags allowed per post", status.HTTP_400_BAD_REQUEST)
+            return error_response("Maximum 10 tags allowed per post", None, status.HTTP_400_BAD_REQUEST)
+        
+        cover_image = request.FILES.get("cover_image")
+
+        if not cover_image:
+            return error_response("No cover Image", {"details":"Cover image not in request"}, status.HTTP_404_NOT_FOUND)
         
         with transaction.atomic():
             post = Post.objects.create(
@@ -146,7 +146,7 @@ def create_post(request):
                 if not tag_name:
                     continue
                 if len(tag_name) > 50:
-                    return error_response(f"Tag '{tag_name}' exceeds 50 characters", status.HTTP_400_BAD_REQUEST)
+                    return error_response(f"Tag '{tag_name}' exceeds 50 characters", None, status.HTTP_400_BAD_REQUEST)
                 
                 tag, created = Tag.objects.get_or_create(name=tag_name)
                 tag_objects.append(tag)
@@ -179,6 +179,7 @@ def create_post(request):
         
         return error_response(
             "An unexpected error occurred while creating the post. Please try again.",
+            {"details": str(e)},
             status.HTTP_500_INTERNAL_SERVER_ERROR
         )
 
@@ -233,17 +234,16 @@ def update_post(request, post_id):
             else:
                 post.category = None
         
-        if "cover_image" in data:
-            cover_image = data["cover_image"].strip()
-            if cover_image:
-                url_validator = URLValidator()
-                try:
-                    url_validator(cover_image)
-                    post.cover_image = cover_image
-                except ValidationError:
-                    return error_response("Invalid cover image URL", status.HTTP_400_BAD_REQUEST)
-            else:
-                post.cover_image = None
+        cover_image = data.FILES.get("cover_image")
+        if cover_image:       
+            url_validator = URLValidator()
+            try:
+                url_validator(cover_image)
+                post.cover_image = cover_image
+            except ValidationError:
+                return error_response("Invalid cover image URL", status.HTTP_400_BAD_REQUEST)
+        else:
+            post.cover_image = None
         
         if "is_published" in data:
             post.is_published = bool(data["is_published"])
@@ -645,7 +645,7 @@ def get_user_posts(request):
             is_published = published_filter.lower() in ['true', '1', 'yes']
             posts = posts.filter(is_published=is_published)
         
-        posts = posts.select_related('category').prefetch_related('tags', 'likes').order_by('-created_at')
+        posts = posts.select_related('category').prefetch_related('tags', 'post_likes').order_by('-created_at')
         
         paginator = Paginator(posts, page_size)
         
@@ -682,4 +682,52 @@ def get_user_posts(request):
 
 
 
-        # https://www.figma.com/community/file/1225308519419319279/jobpilot-job-portal-figma-ui-template-community
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def get_categories(request):
+    try:
+
+        category = Category.objects.all()
+
+        serializer = CategorySerializer(category, many=True)
+
+        return success_response("ok", serializer.data)
+
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error retrieving user posts: {str(e)}", exc_info=True)
+        return error_response("An error occurred while retrieving categories", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
+_last_featured = {"post_id": None, "timestamp": None}
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticatedOrReadOnly])
+def featured_post(request):
+    """
+    Returns a random featured post, updated every 5 hours.
+    """
+    global _last_featured
+    now = timezone.now()
+
+    if not _last_featured["post_id"] or not _last_featured["timestamp"] or (now - _last_featured["timestamp"]).total_seconds() > 5 * 3600:
+        posts = Post.objects.filter(is_published=True)
+        if not posts.exists():
+            return error_response(
+                {"status": "error", "message": "No posts available", "data": None},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        post = random.choice(posts)
+        _last_featured["post_id"] = post.id
+        _last_featured["timestamp"] = now
+    else:
+        post = Post.objects.get(id=_last_featured["post_id"])
+
+    serializer = PostSerializer(post)
+    return success_response("ok", serializer.data)
+
+# https://www.figma.com/community/file/1225308519419319279/jobpilot-job-portal-figma-ui-template-community
