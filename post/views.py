@@ -15,21 +15,23 @@ from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.db.models import Q, Count, F, FloatField, ExpressionWrapper
 from django.utils import timezone
 from datetime import timedelta
+from handlers.utils.cache_utils import get_or_set_cache, set_cached_data, get_cached_data
+from django.views.decorators.cache import cache_page
+from django.utils.decorators import method_decorator
+from django.views.decorators.vary import vary_on_cookie
 
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticatedOrReadOnly])
+@vary_on_cookie
+@cache_page(60 * 60 * 24 * 30)  
 def get_all_posts(request):
-
     try:
-        posts = Post.objects.filter(is_published=True).all().order_by("-created_at")
-
+        posts = Post.objects.filter(is_published=True).order_by("-created_at")
         serializer = PostSerializer(posts, many=True)
-
         return success_response("Posts fetched successfully", serializer.data)
     except Exception as e:
         return error_response("", str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 
 @api_view(["POST"])
@@ -342,6 +344,14 @@ def get_post_by_slug(request, slug):
     Get a single post by slug using PostSerializer,
     with additional dynamic fields like is_liked and views.
     """
+
+    cache_key = f"post:{slug}"
+    cached_post = get_cached_data(cache_key)
+
+    # Only use cached data for unauthenticated users (public data)
+    if cached_post and not request.user.is_authenticated:
+        return success_response("Post retrieved successfully (cached)", cached_post)
+    
     try:
         post = (
             Post.objects
@@ -350,18 +360,21 @@ def get_post_by_slug(request, slug):
             .get(slug=slug)
         )
 
-        # Restrict unpublished posts
-        if not post.is_published and not request.user.is_authenticated:
-            return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+        if not post.is_published:
+            if not request.user.is_authenticated:
+                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+            
+            author = UserProfile.objects.get(user=request.user)
+            if post.author != author:
+                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+            
 
-        # Increment view count once per session
         session_key = f"post_viewed_{post.id}"
         if not request.session.get(session_key):
             post.views += 1
             post.save(update_fields=["views"])
             request.session[session_key] = True
 
-        # Determine if user liked the post
         is_liked = False
         if request.user.is_authenticated:
             try:
@@ -370,17 +383,17 @@ def get_post_by_slug(request, slug):
             except UserProfile.DoesNotExist:
                 pass
 
-        # Serialize the post
-        from .serializers import PostSerializer  # import here to avoid circular import
         serializer = PostSerializer(post, context={"request": request})
         data = serializer.data
 
-        # Add dynamic fields
         data.update({
             "is_liked": is_liked,
             "likes_count": post.total_likes(),
             "views": post.views,
         })
+
+        if post.is_published and not request.user.is_authenticated:
+            set_cached_data(cache_key, data, timeout=60 * 60 * 24 * 7)
 
         return success_response("Post retrieved successfully", data, status.HTTP_200_OK)
 
@@ -403,6 +416,14 @@ def get_post_by_id(request, post_id):
     """
     Get a single post by ID. Similar to get_by_slug but uses UUID.
     """
+
+    cache_key = f"post:{post_id}"
+    cached_post = get_cached_data(cache_key)
+
+    # Only use cached data for unauthenticated users (public data)
+    if cached_post and not request.user.is_authenticated:
+        return success_response("Post retrieved successfully (cached)", cached_post)
+    
     try:
         post = Post.objects.select_related('author', 'author__user', 'category').prefetch_related('tags', 'post_likes').get(id=post_id)
         
@@ -411,62 +432,38 @@ def get_post_by_id(request, post_id):
             if not request.user.is_authenticated:
                 return error_response("Post not found", status.HTTP_404_NOT_FOUND)
             
-            # author = UserProfile.objects.get(user=request.user)
-            # if post.author != author:
-            #     return error_response("Post not found", status.HTTP_404_NOT_FOUND)
+            author = UserProfile.objects.get(user=request.user)
+            if post.author != author:
+                return error_response("Post not found", status.HTTP_404_NOT_FOUND)
         
         # Increment view count
         session_key = f"post_viewed_{post.id}"
         if not request.session.get(session_key):
             post.views += 1
-            post.save(update_fields=['views'])
+            post.save(update_fields=["views"])
             request.session[session_key] = True
-        
-        # Check if current user liked the post
+
         is_liked = False
         if request.user.is_authenticated:
             try:
                 user_profile = UserProfile.objects.get(user=request.user)
-                is_liked = post.likes.filter(id=user_profile.id).exists()
+                is_liked = post.post_likes.filter(user=user_profile).exists()
             except UserProfile.DoesNotExist:
                 pass
-        
-        response_data = {
-            "id": str(post.id),
-            "slug": post.slug,
-            "title": post.title,
-            "content": post.content,
-            "content_markdown": post.content_markdown,
-            "excerpt": post.excerpt,
-            "cover_image": post.cover_image,
-            "author": {
-                "id": str(post.author.id),
-                "username": post.author.user.username,
-                "full_name": post.author.user.get_full_name() or post.author.user.username,
-                "email": post.author.user.email,
-                "bio": getattr(post.author, 'bio', ''),
-                "avatar": getattr(post.author, 'avatar', None),
-            },
-            "category": {
-                "id": post.category.id,
-                "name": post.category.name,
-                "slug": post.category.slug
-            } if post.category else None,
-            "tags": [{"id": tag.id, "name": tag.name, "slug": tag.slug} for tag in post.tags.all()],
-            "views": post.views,
-            "likes_count": post.total_likes(),
+
+        serializer = PostSerializer(post, context={"request": request})
+        data = serializer.data
+
+        data.update({
             "is_liked": is_liked,
-            "is_published": post.is_published,
-            "created_at": post.created_at.isoformat(),
-            "updated_at": post.updated_at.isoformat(),
-            "seo": {
-                "title": post.seo_title or post.title,
-                "description": post.seo_description or post.excerpt,
-                "canonical_url": post.canonical_url,
-            }
-        }
+            "likes_count": post.total_likes(),
+            "views": post.views,
+        })
+
+        if post.is_published and not request.user.is_authenticated:
+            set_cached_data(cache_key, data, timeout=60 * 60 * 24 * 7)
         
-        return success_response("Post retrieved successfully", response_data, status.HTTP_200_OK)
+        return success_response("Post retrieved successfully", data, status.HTTP_200_OK)
     
     except Post.DoesNotExist:
         return error_response("Post not found", status.HTTP_404_NOT_FOUND)
@@ -624,40 +621,44 @@ def list_posts(request):
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def get_user_posts(request):
     """
-        Get all posts by the authenticated user (including drafts).
-        Supports pagination and filtering by published status.
+    Get all posts by the authenticated user (including drafts).
+    Cached per user, page, and filter for 10 minutes.
     """
     try:
         author = UserProfile.objects.get(user=request.user)
-        
-        page = request.GET.get('page', 1)
+        page = int(request.GET.get('page', 1))
         page_size = min(int(request.GET.get('page_size', 10)), 50)
         published_filter = request.GET.get('published')
-        
+
+        # Build a unique cache key for this user's query
+        cache_key = f"user_posts:{author.id}:page:{page}:size:{page_size}:published:{published_filter or 'all'}"
+        cached_data = get_cached_data(cache_key)
+
+        if cached_data:
+            return success_response("User posts retrieved successfully", cached_data, status.HTTP_200_OK)
+
+        # Query if cache miss
         posts = Post.objects.filter(author=author)
-        
         if published_filter is not None:
             is_published = published_filter.lower() in ['true', '1', 'yes']
             posts = posts.filter(is_published=is_published)
-        
+
         posts = posts.select_related('category').prefetch_related('tags', 'post_likes').order_by('-created_at')
-        
+
         paginator = Paginator(posts, page_size)
-        
         try:
             posts_page = paginator.page(page)
         except PageNotAnInteger:
             posts_page = paginator.page(1)
         except EmptyPage:
             posts_page = paginator.page(paginator.num_pages)
-        
-        serializer = PostSerializer(posts, many=True)
-        
+
+        serializer = PostSerializer(posts_page, many=True)
+
         response_data = {
             "posts": serializer.data,
             "pagination": {
@@ -669,9 +670,12 @@ def get_user_posts(request):
                 "has_previous": posts_page.has_previous(),
             }
         }
-        
+
+        # Cache response for 10 minutes
+        set_cached_data(cache_key, response_data, timeout=60 * 10)
+
         return success_response("User posts retrieved successfully", response_data, status.HTTP_200_OK)
-    
+
     except UserProfile.DoesNotExist:
         return error_response("User profile not found", status.HTTP_404_NOT_FOUND)
     except Exception as e:
@@ -681,53 +685,70 @@ def get_user_posts(request):
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
-
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def get_categories(request):
     try:
 
-        category = Category.objects.all()
+        def fetch_categories():
+            category = Category.objects.all()
+            serializer = CategorySerializer(category, many=True)
+            return serializer.data
 
-        serializer = CategorySerializer(category, many=True)
+        data = get_or_set_cache("all_categories", fetch_categories, timeout=60 * 60 * 24 * 30)  # 30 days
 
-        return success_response("ok", serializer.data)
+        return success_response("ok", data)
 
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
-        logger.error(f"Error retrieving user posts: {str(e)}", exc_info=True)
-        return error_response("An error occurred while retrieving categories", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error retrieving categories: {str(e)}", exc_info=True)
+        return error_response(
+            "An error occurred while retrieving categories",
+            {"details": str(e)},
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 
+        return success_response("ok", data)
 
-_last_featured = {"post_id": None, "timestamp": None}
+    except Exception as e:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error retrieving categories: {str(e)}", exc_info=True)
+        return error_response(
+            "An error occurred while retrieving categories",
+            {"details": str(e)},
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticatedOrReadOnly])
 def featured_post(request):
     """
-    Returns a random featured post, updated every 5 hours.
+        Returns a random featured post, updated every 5 hours.
     """
-    global _last_featured
-    now = timezone.now()
 
-    if not _last_featured["post_id"] or not _last_featured["timestamp"] or (now - _last_featured["timestamp"]).total_seconds() > 5 * 3600:
-        posts = Post.objects.filter(is_published=True)
-        if not posts.exists():
-            return error_response(
-                {"status": "error", "message": "No posts available", "data": None},
-                status=status.HTTP_404_NOT_FOUND
-            )
+    cache_key = "featured_post"
+    cached_data = get_cached_data.get(cache_key)
 
-        post = random.choice(posts)
-        _last_featured["post_id"] = post.id
-        _last_featured["timestamp"] = now
-    else:
-        post = Post.objects.get(id=_last_featured["post_id"])
+    # If cached post exists and is still valid
+    if cached_data:
+        return success_response("ok", cached_data)
 
+    # Otherwise, pick a new featured post
+    posts = Post.objects.filter(is_published=True)
+    if not posts.exists():
+        return error_response("No posts available", None, status.HTTP_404_NOT_FOUND)
+
+    post = random.choice(posts)
     serializer = PostSerializer(post)
-    return success_response("ok", serializer.data)
+    data = serializer.data
+
+    # Cache it for 5 hours (18000 seconds)
+    set_cached_data(cache_key, data, timeout=60 * 60 * 5)
+
+    return success_response("ok", data)
 
 # https://www.figma.com/community/file/1225308519419319279/jobpilot-job-portal-figma-ui-template-community

@@ -8,6 +8,7 @@ from django.utils import timezone
 from datetime import timedelta
 from .models import LoginActivity
 from accounts.models import UserProfile
+from accounts.serializers import UpdateProfileSerializer
 from blogsystem.handler.responses.error import error_response
 from blogsystem.handler.responses.success import success_response
 from .handler.cookies.cookies import set_jwt_cookies
@@ -15,6 +16,7 @@ from .utils.get_user_ip import get_client_ip
 from handlers.services.email_service import send_templated_email
 from rest_framework.throttling import ScopedRateThrottle
 User = get_user_model()
+from handlers.utils.cache_utils import set_cached_data
 
 
 @api_view(["POST"])
@@ -85,6 +87,10 @@ def login(request):
         access = refresh.access_token
 
         LoginActivity.objects.create(user=user.profile, ip_address=ip, user_agent=agent, success=True)
+
+        serializer = UpdateProfileSerializer(user.profile)
+        cache_key = f"user_profile:{user.id}"
+        set_cached_data(cache_key, serializer.data, timeout=60 * 60 * 6)  # 6 hours
 
 
         response = success_response("Login successful", {
