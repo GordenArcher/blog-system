@@ -216,3 +216,6 @@ def logout_device(request):
 #     })
 
 #     return set_jwt_cookies(response, refresh, access, resume_token.token)
+
+
+

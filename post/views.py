@@ -23,15 +23,25 @@ from django.views.decorators.vary import vary_on_cookie
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticatedOrReadOnly])
-@vary_on_cookie
-@cache_page(60 * 60 * 24 * 30)  
 def get_all_posts(request):
     try:
+        cache_key = "all_posts"
+        cached_data = get_cached_data(cache_key)
+
+        if cached_data:
+            return success_response("Posts fetched successfully (cached)", cached_data)
+
         posts = Post.objects.filter(is_published=True).order_by("-created_at")
-        serializer = PostSerializer(posts, many=True)
-        return success_response("Posts fetched successfully", serializer.data)
+        serializer = PostSerializer(posts, many=True, context={"request": request})
+        data = serializer.data
+
+        set_cached_data(cache_key, data, 60 * 60 * 24 * 30)
+
+        return success_response("Posts fetched successfully", data)
+    
     except Exception as e:
-        return error_response("", str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return error_response("An error occurred", str(e), status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 @api_view(["POST"])
@@ -47,8 +57,6 @@ def create_post(request):
     """
     try:
         data = request.data
-
-        print(data)
         
         title = data.get("title", "").strip()
         content = data.get("content", "").strip()
@@ -492,7 +500,6 @@ def list_posts(request):
         - published: Filter by published status (admin only)
     """
     try:
-        # Get query parameters
         page = request.GET.get('page', 1)
         page_size = min(int(request.GET.get('page_size', 12)), 50)
         category_slug = request.GET.get('category')
@@ -501,7 +508,8 @@ def list_posts(request):
         search_query = request.GET.get('search', '').strip()
         sort_by = request.GET.get('sort', 'latest')
         published_filter = request.GET.get('published')
-        
+
+        # Base queryset
         if request.user.is_authenticated and published_filter is not None:
             try:
                 user_profile = UserProfile.objects.get(user=request.user)
@@ -512,29 +520,27 @@ def list_posts(request):
                 posts = Post.objects.filter(is_published=True)
         else:
             posts = Post.objects.filter(is_published=True)
-        
+
+        # Filtering
         if category_slug:
             posts = posts.filter(category__slug=category_slug)
-        
         if tag_slug:
             posts = posts.filter(tags__slug=tag_slug)
-        
         if author_username:
             posts = posts.filter(author__user__username=author_username)
-        
         if search_query:
             posts = posts.filter(
-                Q(title__icontains=search_query) | 
+                Q(title__icontains=search_query) |
                 Q(content__icontains=search_query) |
                 Q(excerpt__icontains=search_query) |
                 Q(tags__name__icontains=search_query)
             ).distinct()
-        
+
+        # Sorting
         if sort_by == 'popular':
             posts = posts.annotate(
                 likes_count=Count('post_likes', distinct=True)
             ).order_by('-likes_count', '-views', '-created_at')
-
         elif sort_by == 'trending':
             one_week_ago = timezone.now() - timedelta(days=7)
             posts = posts.annotate(
@@ -544,55 +550,41 @@ def list_posts(request):
                     output_field=FloatField()
                 )
             ).filter(created_at__gte=one_week_ago).order_by('-trending_score', '-created_at')
-
-        else: 
+        else:
             posts = posts.order_by('-created_at')
-        
+
         posts = posts.select_related('author', 'author__user', 'category').prefetch_related('tags', 'post_likes')
-        
+
+        # Pagination
         paginator = Paginator(posts, page_size)
-        
         try:
             posts_page = paginator.page(page)
         except PageNotAnInteger:
             posts_page = paginator.page(1)
         except EmptyPage:
             posts_page = paginator.page(paginator.num_pages)
-        
-        posts_data = []
-        for post in posts_page:
-            is_liked = False
-            if request.user.is_authenticated:
-                try:
-                    user_profile = UserProfile.objects.get(user=request.user)
-                    is_liked = post.likes.filter(id=user_profile.id).exists()
-                except UserProfile.DoesNotExist:
-                    pass
-            
-            posts_data.append({
-                "id": str(post.id),
-                "slug": post.slug,
-                "title": post.title,
-                "excerpt": post.excerpt,
-                "cover_image": post.cover_image,
-                "author": {
-                    "id": str(post.author.id),
-                    "username": post.author.user.username,
-                    "full_name": post.author.user.get_full_name() or post.author.user.username,
-                    "avatar": getattr(post.author.user, 'profile_image', None),
-                },
-                "category": {
-                    "id": post.category.id,
-                    "name": post.category.name
-                } if post.category else None,
-                "tags": [{"id": tag.id, "name": tag.name, "slug": tag.slug} for tag in post.tags.all()[:5]],
-                "views": post.views,
-                "likes_count": post.total_likes(),
-                "is_liked": is_liked,
-                "created_at": post.created_at.isoformat(),
-                "read_time": f"{max(1, len(post.content.split()) // 200)} min read"
-            })
-        
+
+        # Serialize
+        serializer = PostSerializer(posts_page, many=True, context={"request": request})
+        posts_data = serializer.data
+
+        # Add custom computed fields like 'is_liked' and 'read_time'
+        user_profile = None
+        if request.user.is_authenticated:
+            try:
+                user_profile = UserProfile.objects.get(user=request.user)
+            except UserProfile.DoesNotExist:
+                pass
+
+        for post_dict, post_obj in zip(posts_data, posts_page):
+            if user_profile:
+                post_dict["is_liked"] = post_obj.post_likes.filter(id=user_profile.id).exists()
+            else:
+                post_dict["is_liked"] = False
+
+            post_dict["read_time"] = f"{max(1, len(post_obj.content.split()) // 200)} min read"
+
+        # Response
         response_data = {
             "posts": posts_data,
             "pagination": {
@@ -611,14 +603,15 @@ def list_posts(request):
                 "sort": sort_by
             }
         }
-        
+
         return success_response("Posts retrieved successfully", response_data, status.HTTP_200_OK)
-    
+
     except Exception as e:
         import logging
         logger = logging.getLogger(__name__)
         logger.error(f"Error listing posts: {str(e)}", exc_info=True)
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
 
 
 @api_view(["GET"])
@@ -628,20 +621,19 @@ def get_user_posts(request):
     Get all posts by the authenticated user (including drafts).
     Cached per user, page, and filter for 10 minutes.
     """
+
     try:
         author = UserProfile.objects.get(user=request.user)
         page = int(request.GET.get('page', 1))
         page_size = min(int(request.GET.get('page_size', 10)), 50)
         published_filter = request.GET.get('published')
 
-        # Build a unique cache key for this user's query
         cache_key = f"user_posts:{author.id}:page:{page}:size:{page_size}:published:{published_filter or 'all'}"
         cached_data = get_cached_data(cache_key)
 
         if cached_data:
             return success_response("User posts retrieved successfully", cached_data, status.HTTP_200_OK)
 
-        # Query if cache miss
         posts = Post.objects.filter(author=author)
         if published_filter is not None:
             is_published = published_filter.lower() in ['true', '1', 'yes']
@@ -671,7 +663,6 @@ def get_user_posts(request):
             }
         }
 
-        # Cache response for 10 minutes
         set_cached_data(cache_key, response_data, timeout=60 * 10)
 
         return success_response("User posts retrieved successfully", response_data, status.HTTP_200_OK)
@@ -683,6 +674,7 @@ def get_user_posts(request):
         logger = logging.getLogger(__name__)
         logger.error(f"Error retrieving user posts: {str(e)}", exc_info=True)
         return error_response("An error occurred while retrieving posts", {"details": str(e)}, status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 
 @api_view(["GET"])
@@ -731,7 +723,7 @@ def featured_post(request):
     """
 
     cache_key = "featured_post"
-    cached_data = get_cached_data.get(cache_key)
+    cached_data = get_cached_data(cache_key)
 
     # If cached post exists and is still valid
     if cached_data:
